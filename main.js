@@ -2,7 +2,7 @@
 let records = [];
 let chartInstance = null;
 let latestCsvFromServer = '';
-let sortOrder = 'desc';           // 日期排序：desc=最新在前，asc=最旧在前
+let sortOrder = 'desc';           // 排序：desc=seq 大在前，asc=seq 小在前
 const API_URL = '/parse_images';
 
 // DOM 引用
@@ -27,6 +27,8 @@ const inferProgressWrap = document.getElementById('inferProgressWrap');
 const inferProgressFill = document.getElementById('inferProgressFill');
 const inferProgressText = document.getElementById('inferProgressText');
 const inferProgressPct = document.getElementById('inferProgressPct');
+const admissionDateInput = document.getElementById('admissionDate');
+const graduationDateInput = document.getElementById('graduationDate');
 
 let inferProgressTimer = null;
 let inferProgressValue = 0;
@@ -154,6 +156,81 @@ function finishInferenceProgress(success, text) {
     }
 }
 
+// 读取入学/毕业时间（取整到日）
+function getDateRange() {
+    const startStr = admissionDateInput?.value;
+    const endStr = graduationDateInput?.value;
+    const start = startStr ? parseDate(startStr) : null;
+    const end = endStr ? parseDate(endStr) : null;
+    return { start, end };
+}
+
+// 裁剪日期对到有效区间内
+function calcClippedDays(exitDate, entryDate, rangeStart, rangeEnd) {
+    if (!exitDate || !entryDate) return 0;
+
+    let e1 = new Date(exitDate);
+    let e2 = new Date(entryDate);
+
+    // 入学时间裁剪起点
+    if (rangeStart && e1 < rangeStart) e1 = new Date(rangeStart);
+    // 毕业时间裁剪终点
+    if (rangeEnd && e2 > rangeEnd) e2 = new Date(rangeEnd);
+
+    if (e1 > e2) return 0;
+
+    // 首尾都算在内：Aug 26 → Nov 29 = 95 + 1 = 96 天
+    const diffMs = e2 - e1;
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
+    return Math.max(1, diffDays);
+}
+
+function calcTotalDays(records, rangeStart, rangeEnd) {
+    if (!records.length) return 0;
+
+    // 按原始顺序（OCR 读出顺序 = seq 顺序）两两配对
+    // 每对格式：(入境, 出境) —— 但个别图片可能是 (出境, 入境)，兼容处理
+    // 境外天数 = 入境日期 - 出境日期，再裁剪到有效区间
+    let totalDays = 0;
+    let i = 0;
+
+    while (i + 1 < records.length) {
+        const a = records[i];
+        const b = records[i + 1];
+
+        let entryDate = null;  // 入境日期
+        let exitDate = null;   // 出境日期
+
+        if (a.type === '入境' && b.type === '出境') {
+            entryDate = parseDate(a.date);
+            exitDate = parseDate(b.date);
+        } else if (a.type === '出境' && b.type === '入境') {
+            entryDate = parseDate(b.date);
+            exitDate = parseDate(a.date);
+        }
+
+        totalDays += calcClippedDays(exitDate, entryDate, rangeStart, rangeEnd);
+        i += 2;
+    }
+
+    // 奇数条：最后一条是入境（无对应出境），累积到今天（或毕业日）
+    if (records.length % 2 === 1) {
+        const last = records[records.length - 1];
+        if (last.type === '入境') {
+            const d = parseDate(last.date);
+            if (d) {
+                const now = new Date();
+                now.setHours(0, 0, 0, 0);
+                // 未配对：从入境日算到今天（或毕业日，取更近的）
+                const endDate = rangeEnd && rangeEnd < now ? rangeEnd : now;
+                totalDays += calcClippedDays(d, endDate, rangeStart, rangeEnd);
+            }
+        }
+    }
+
+    return totalDays;
+}
+
 // 渲染表格
 function renderTable() {
     if (!records.length) {
@@ -161,16 +238,8 @@ function renderTable() {
         return;
     }
 
-    // 按日期排序显示（不影响原始 records 数组）；日期相同按 seq 排
+    // 按 seq（序号）排序显示，seq 唯一不会重复
     const sorted = [...records].sort((a, b) => {
-        const da = parseDate(a.date);
-        const db = parseDate(b.date);
-        if (!da && !db) return 0;
-        if (!da) return 1;
-        if (!db) return -1;
-        const dateDiff = sortOrder === 'desc' ? db - da : da - db;
-        if (dateDiff !== 0) return dateDiff;
-        // 日期相同：按 seq（序号）排
         const sa = parseInt(a.seq, 10) || 0;
         const sb = parseInt(b.seq, 10) || 0;
         return sortOrder === 'desc' ? sb - sa : sa - sb;
@@ -210,7 +279,7 @@ function renderTable() {
 
 function toggleSortOrder() {
     sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
-    renderTable();
+    renderTable(); // 按 seq 重新排序显示
 }
 
 function setRecords(newRecords) {
@@ -221,8 +290,9 @@ function setRecords(newRecords) {
 // 更新所有统计、图表、进度条
 function updateAll() {
     renderTable();
+    const { start: admitDate, end: gradDate } = getDateRange();
+    const days = calcTotalDays(records, admitDate, gradDate);
     const total = records.length;
-    const days = calcTotalDays(records);
     totalCountEl.textContent = total;
     totalDaysEl.textContent = days;
 
@@ -232,14 +302,14 @@ function updateAll() {
     taxProgressFill.style.width = taxPct + '%';
     taxProgressLabel.textContent = `${days} / ${TAX_THRESHOLD} 天`;
     const taxGap = Math.max(0, TAX_THRESHOLD - days);
-    taxGapMsg.innerHTML = taxGap === 0 ? '✅ 已达标，具备资格' : `差距：还需 ${taxGap} 天`;
+    taxGapMsg.innerHTML = taxGap === 0 ? '已达标，具备资格' : `差距：还需 ${taxGap} 天`;
     taxGapMsg.style.color = taxGap === 0 ? '#2a7a5a' : '#c74a4a';
 
     // 落户
     updateCityProgress(days);
 
-    // 图表
-    updateChart(records);
+    // 图表（同样使用日期范围裁剪）
+    updateChart(records, admitDate, gradDate);
 }
 
 function updateCityProgress(days) {
@@ -257,11 +327,11 @@ function updateCityProgress(days) {
     cityProgressFill.style.width = pct + '%';
     cityProgressLabel.textContent = `${days} / ${threshold} 天`;
     const gap = Math.max(0, threshold - days);
-    cityGapMsg.innerHTML = gap === 0 ? '✅ 已达标，具备资格' : `差距：还需 ${gap} 天`;
+    cityGapMsg.innerHTML = gap === 0 ? '已达标，具备资格' : `差距：还需 ${gap} 天`;
     cityGapMsg.style.color = gap === 0 ? '#2a7a5a' : '#c74a4a';
 }
 
-function updateChart(records) {
+function updateChart(records, rangeStart, rangeEnd) {
     if (!records.length) {
         clearChart();
         return;
@@ -269,7 +339,7 @@ function updateChart(records) {
 
     const monthMap = new Map(); // "YYYY-MM" → 天数
 
-    // 与 calcTotalDays 一致的配对逻辑，逐天统计到月份
+    // 与 calcTotalDays 一致的配对逻辑，逐天统计到月份（含裁剪）
     for (let i = 0; i + 1 < records.length; i += 2) {
         const a = records[i];
         const b = records[i + 1];
@@ -283,20 +353,22 @@ function updateChart(records) {
         } else continue;
         if (!entryDate || !exitDate) continue;
 
-        if (exitDate.getTime() === entryDate.getTime()) {
-            // 同天往返：当天算 1 天
-            addDay(monthMap, exitDate);
-        } else {
-            // 逐天累加（从出境日到入境日前一天）
-            const cur = new Date(exitDate);
-            while (cur < entryDate) {
-                addDay(monthMap, cur);
-                cur.setDate(cur.getDate() + 1);
-            }
+        // 裁剪到有效区间
+        let e1 = new Date(exitDate);
+        let e2 = new Date(entryDate);
+        if (rangeStart && e1 < rangeStart) e1 = new Date(rangeStart);
+        if (rangeEnd && e2 > rangeEnd) e2 = new Date(rangeEnd);
+        if (e1 > e2) continue; // 完全在区间外
+
+        // 逐天累加（从 e1 到 e2 全包含，首尾都算）
+        const cur = new Date(e1);
+        while (cur <= e2) {
+            addDay(monthMap, cur);
+            cur.setDate(cur.getDate() + 1);
         }
     }
 
-    // 奇数条：最后一条入境未配对，统计到今天
+    // 奇数条：最后一条入境未配对，统计到今天（或毕业日）
     if (records.length % 2 === 1) {
         const last = records[records.length - 1];
         if (last.type === '入境') {
@@ -304,8 +376,14 @@ function updateChart(records) {
             if (d) {
                 const now = new Date();
                 now.setHours(0, 0, 0, 0);
-                const cur = new Date(d);
-                while (cur <= now) {
+                const endDate = rangeEnd && rangeEnd < now ? rangeEnd : now;
+                let start = new Date(d);
+                let end = new Date(endDate);
+                if (rangeStart && start < rangeStart) start = new Date(rangeStart);
+                if (rangeEnd && end > rangeEnd) end = new Date(rangeEnd);
+                if (start > end) return;
+                const cur = new Date(start);
+                while (cur <= end) {
                     addDay(monthMap, cur);
                     cur.setDate(cur.getDate() + 1);
                 }
@@ -442,8 +520,16 @@ addRowBtn.addEventListener('click', () => {
     updateAll();
 });
 document.getElementById('sortDateHeader')?.addEventListener('click', toggleSortOrder);
-citySelect.addEventListener('change', () => updateCityProgress(calcTotalDays(records)));
-eduSelect.addEventListener('change', () => updateCityProgress(calcTotalDays(records)));
+admissionDateInput?.addEventListener('change', updateAll);
+graduationDateInput?.addEventListener('change', updateAll);
+citySelect.addEventListener('change', () => {
+    const { start: admitDate, end: gradDate } = getDateRange();
+    updateCityProgress(calcTotalDays(records, admitDate, gradDate));
+});
+eduSelect.addEventListener('change', () => {
+    const { start: admitDate, end: gradDate } = getDateRange();
+    updateCityProgress(calcTotalDays(records, admitDate, gradDate));
+});
 
 // 初始化加载示例
 loadSample();
