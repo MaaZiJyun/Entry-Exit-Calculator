@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>出入境记录分析系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="app">
+    <h1>出入境记录分析</h1>
+    <div id="statusMsg" class="toast" style="display:none;"></div>
+
+    <div class="upload-area" id="uploadArea">
+        <div style="font-weight:500;">点击上传图片文件（支持多选或拖拽）</div>
+        <div style="font-size:13px; color:#5e6f8d;">OCR + 本地小模型，识别多图表格并导出 CSV</div>
+        <input type="file" id="fileInput" accept="image/*" multiple>
+    </div>
+    <div id="inferProgressWrap" class="infer-progress" style="display:none;">
+        <div class="progress-label">
+            <span id="inferProgressText">准备上传...</span>
+            <span id="inferProgressPct">0%</span>
+        </div>
+        <div class="progress-bar">
+            <div class="progress-fill infer-progress-fill" id="inferProgressFill" style="width:0%"></div>
+        </div>
+    </div>
+    <div style="margin:12px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <button class="btn btn-outline" id="loadSampleBtn">加载示例数据</button>
+        <span class="badge">示例包含2条记录</span>
+    </div>
+
+    <div class="flex-row">
+        <div class="card" style="flex:1.3;">
+            <h3>统计摘要</h3>
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-item"><div class="stat-number" id="totalCount">0</div><div class="stat-label">总出入境次数</div></div>
+                <div class="stat-item"><div class="stat-number" id="totalDays">0</div><div class="stat-label">累计境外天数</div></div>
+            </div>
+            <div class="chart-container"><canvas id="monthChart"></canvas></div>
+        </div>
+        <div class="card" style="flex:1;">
+            <h3>免税车购买资格</h3>
+            <div class="progress-wrap">
+                <div class="progress-label"><span>累计境外天数</span><span id="taxProgressLabel">0 / 270 天</span></div>
+                <div class="progress-bar"><div class="progress-fill" id="taxProgressFill" style="width:0%"></div></div>
+                <div style="font-size:13px; margin-top:4px;" id="taxGapMsg">差距：还需 270 天</div>
+            </div>
+            <hr style="border-color:#e0e7ef; margin:18px 0;">
+            <h3>落户资格</h3>
+            <div class="inline-flex">
+                <select class="edu-select" id="eduSelect"><option value="本科">本科</option><option value="硕士" selected>硕士</option><option value="博士">博士</option></select>
+                <select class="city-select" id="citySelect"><option value="北京">北京</option><option value="上海" selected>上海</option><option value="广州">广州</option><option value="深圳">深圳</option><option value="杭州">杭州</option></select>
+            </div>
+            <div class="progress-wrap">
+                <div class="progress-label"><span>累计境外天数</span><span id="cityProgressLabel">0 / 360 天</span></div>
+                <div class="progress-bar"><div class="progress-fill" id="cityProgressFill" style="width:0%"></div></div>
+                <div style="font-size:13px; margin-top:4px;" id="cityGapMsg">差距：还需 360 天</div>
+            </div>
+            <div style="font-size:12px; color:#7a8aa5; margin-top:6px;">* 政策阈值仅供参考</div>
+        </div>
+    </div>
+
+    <div class="card" style="flex:1 1 100%;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+            <h3>解析数据（双击单元格可编辑）</h3>
+            <div class="action-bar">
+                <button class="btn btn-success" id="exportCsvBtn">导出CSV</button>
+                <button class="btn btn-outline" id="addRowBtn">＋ 添加行</button>
+            </div>
+        </div>
+        <div style="overflow-x:auto; margin-top:10px;">
+            <table id="dataTable">
+                <thead><tr><th>序号</th><th>出境/入境</th><th id="sortDateHeader" style="cursor:pointer;user-select:none;">出入境日期 <span id="sortIndicator">▼</span></th><th>证件名称</th><th>证件号码</th><th>出入境口岸</th><th>航班号</th></tr></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    
+</div>
+<script src="/static/main.js"></script>
+</body>
+</html>
